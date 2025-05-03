@@ -2,6 +2,7 @@
 ImageSigner: Uses RSA and LSB to sign and verify images
 """
 
+import hashlib
 from PIL import Image
 import numpy as np
 from cryptography.hazmat.primitives import hashes
@@ -32,11 +33,20 @@ class ImageSigner:
 
     def __generate_signature(self) -> None:
         """Digitally signs the image using the private RSA key"""
-        with open(self.image_path, "rb") as img_file:
-            image_bytes = img_file.read()
+        # --- CHANGES ---
+        img = Image.open(self.image_path).convert("RGB")
+        img_arr = np.array(img)
+        flat_img = img_arr.flatten()
+        flat_img[:self.KEY_SIZE] &= 0b11111110
+        cleared_img_arr = flat_img.reshape(img_arr.shape)
+
+        image_bytes = cleared_img_arr.tobytes()
+
+        hash_digest = hashlib.sha256(image_bytes).digest()
+        # --- END CHANGES ---
 
         self.signature = self.__private_key.sign(
-            image_bytes,
+            hash_digest,
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
                 salt_length=padding.PSS.MAX_LENGTH
@@ -86,10 +96,6 @@ class ImageSigner:
             print("Images have different shapes")
             return False
 
-        if not np.any(original_arr[:4096] ^ signed_arr[:4096]):
-            print("No signature detected in LSBs")
-            return False
-
         if not np.array_equal(original_arr[4096:], signed_arr[4096:]):
             print("Images differ beyond the signature region")
             return False
@@ -102,15 +108,22 @@ class ImageSigner:
             print("Verification aborted: No signature found")
             return False
 
-        extracted_signature = self._extract_signature(signed_img_path)
+        # --- CHANGES ---
+        signed_img = Image.open(signed_img_path).convert("RGB")
+        signed_img_arr = np.array(signed_img)
+        flat_signed_img = signed_img_arr.flatten()
+        flat_signed_img[:self.KEY_SIZE] &= 0b11111110
+        cleared_signed_img_arr = flat_signed_img.reshape(signed_img_arr.shape)
 
-        with open(self.image_path, "rb") as img_file:
-            image_bytes = img_file.read()
+        singed_hash_img = hashlib.sha256(cleared_signed_img_arr.tobytes()).digest()
+        # --- END CHANGES ---
+
+        extracted_signature = self._extract_signature(signed_img_path)
 
         try:
             self.__public_key.verify(
                 extracted_signature,
-                image_bytes,
+                singed_hash_img,
                 padding.PSS(
                     mgf=padding.MGF1(hashes.SHA256()),
                     salt_length=padding.PSS.MAX_LENGTH
